@@ -1,113 +1,125 @@
-# Reproduce the linked-resource part of Designer Move Project to IS Package
+# Import NBK projects into Designer and link/load them in local IS
 
-Prepared for the nested checkout layout from your screenshots:
+Run **`ImportAndMoveToIS.sh`** for the complete workflow. `MoveToIS.sh` remains available for the filesystem/IS steps alone.
 
-| Item | Example location |
+The complete launcher:
+
+1. Finds inner NBK package projects in the cloned repositories and validates their manifests, Git working trees, and target folders.
+2. Checks that the selected Designer workspace is closed, then builds a small Eclipse startup helper against the jars already installed with your Designer.
+3. Creates Windows junctions and requests package activation, enable, and reload on the local IS.
+4. Starts Designer with your existing workspace. The helper uses Eclipse APIs to import each project in place, configure the installed LSD and Java natures/builders, and connect it to its existing Git repository through EGit.
+5. Verifies the project location, LSD configuration, and Git directory association, then writes a result and metadata backups.
+
+**This version includes the Designer import and Git association that the earlier copy/link-only script did not automate.** It does not copy package contents, copy `.git`, or manually write Eclipse workspace `.metadata` files. `.project` changes are made through Eclipse.
+
+## Expected layout
+
+| Location | Purpose |
 | --- | --- |
-| Repository root and Git metadata | `~/git/ESB/NBKAurionProServices/.git` |
-| Actual IS package and Eclipse project | `~/git/ESB/NBKAurionProServices/NBKAurionProServices/` |
-| Package manifest | `~/git/ESB/NBKAurionProServices/NBKAurionProServices/manifest.v3` |
-| Local IS package entry | `C:\SoftwareAG1015_LCL\IntegrationServer\instances\default\packages\NBKAurionProServices` |
+| `~/git/ESB/NBKAurionProServices/.git` | Existing repository metadata |
+| `~/git/ESB/NBKAurionProServices/NBKAurionProServices/` | Inner package project, containing `manifest.v3`, `.project`, and `.classpath` |
+| `C:/SoftwareAG1015_LCL/IntegrationServer/instances/default/packages/NBKAurionProServices` | Junction pointing to the inner project |
 
-The last entry must be a directory junction to the **inner** package for this linked-resource workflow. IS writes through that junction to the original checkout. Git metadata stays at the outer repository root; do not copy or generate a second `.git` directory inside the package. Git CLI can find the parent repository from the inner package. Designer also needs its Eclipse/EGit project association.
+The `.project` name must equal the inner package directory name. Existing classpath contents are preserved. If a checkout lacks `.project` or `.classpath`, the launcher stops instead of inventing a Designer project/classpath configuration.
 
-Your screenshot showed a plain `cp -R` followed by `wm.server.packages:packageReload`. A separate copy breaks the relationship to the original working tree. The earlier HTTP response contained `Unknown package` and code `-4`; a reload request alone did not introduce that new package to this server.
+## Prerequisites
 
-## What the script does
+- Windows Git Bash and Git. No Python, PowerShell, Maven, or separate Eclipse installation is required on your machine.
+- The entire `tools/move-to-is` directory from this repository, including the `importer` sources.
+- **Close Designer first.** Use your actual existing workspace directory, not the Git checkout or the IS packages directory. The script checks its lock; it never kills Designer or deletes a lock.
+- Designer with **Local Version Control Integration** and **EGit** installed, plus a compatible **JDK** containing the Java compiler. The launcher first checks Designer's `eclipse.ini` runtime, then the installation's `jvm/jvm/bin/java.exe`; use `--java` to specify another matching JDK.
+- The same local development IS already configured in that Designer workspace. For the on-premises LSD workflow, Designer and IS must be in the matching installation. The vendor-documented `watt.server.ns.lockingMode=system` prerequisite still applies.
+- In Designer's Local Service Development preferences, use **Move project to Integration Server package as linked resource**. This is an installation/workspace prerequisite; the script does not guess private vendor preference keys or configure server credentials.
+- Start the local IS before an ordinary `--apply` run. The default URL is `http://localhost:4455`; the password is requested interactively and is not put in the import plan or Java command line.
+- Permission to create directory junctions and write to Designer's `dropins` directory. Designer must process drop-in bundles and allow the new helper under its Startup and Shutdown preferences.
 
-- Finds inner `NBK*` folders immediately below each repository, requiring `manifest.v3` directly inside the folder.
-- Validates that each package belongs to a Git working tree and rejects duplicate package names.
-- Defaults to a read-only plan. `--apply` creates junctions with Windows `mklink /J`.
-- Refuses existing target folders that do not already resolve to the intended source. It does not delete, rename, overwrite, or merge them.
-- Optionally runs instance `bin/jcode.bat make PACKAGE` with `--build-java`.
-- Optionally requests `packageActivate`, `packageEnable`, and `packageReload` with `--online`, prompting once for the IS password.
-- Saves build output and complete HTTP responses in a private `MoveToIS-logs-*` folder. It detects common HTTP-200 application errors but does not claim that an arbitrary response proves a package was successfully loaded.
+## Run one package first
 
-This script **does not register projects in the Designer workspace, add Local Service Development project configuration, or perform Team > Share Project**. Those are Eclipse/Designer operations. A filesystem script cannot substitute for those by copying `.project`, `.git`, or workspace `.metadata`. Full automation of those operations would require an importer running through the Eclipse/Designer APIs; that importer is not included here.
+From your cloned `TrainingDADAPackage` repository, preview the complete operation:
 
-## First, resolve the folders copied by the old script
+```bash
+bash tools/move-to-is/ImportAndMoveToIS.sh \
+  --repo-root "$HOME/git/ESB" \
+  --workspace "/c/Users/YOUR_USER/YOUR_DESIGNER_WORKSPACE" \
+  --designer "/c/SoftwareAG1015_LCL/Designer/eclipse/eclipse.exe" \
+  --package NBKAurionProServices
+```
 
-If a target already exists as a real copied folder, the new script blocks before changing anything. Check for uncommitted changes in both locations first. With the local development IS stopped, preserve the copied folder in a backup location **outside** the IS `packages` directory, then rerun the plan. Avoid a backup inside `packages`, where IS may discover it as another package.
+Replace the workspace placeholder with the directory you normally select when opening Designer. The preview changes no files or IS state. Once its paths are correct, close Designer and run:
 
-For inspection from Windows CMD:
+```bash
+bash tools/move-to-is/ImportAndMoveToIS.sh \
+  --repo-root "$HOME/git/ESB" \
+  --workspace "/c/Users/YOUR_USER/YOUR_DESIGNER_WORKSPACE" \
+  --designer "/c/SoftwareAG1015_LCL/Designer/eclipse/eclipse.exe" \
+  --package NBKAurionProServices \
+  --apply
+```
+
+Designer opens as part of the operation. The launcher waits for the import result and leaves Designer open. Do not open another instance while it is running. The helper is idle on later ordinary launches because they have no `-Dnbk.lsdimport.plan` argument.
+
+To process all detected packages, omit `--package`. To use a specific subset and dependency load order, use `--order package-order.txt`; only the package names in that file are processed. The IS loading phase follows that order. Workspace import order has no dependency semantics.
+
+Other options:
+
+| Option | Behavior |
+| --- | --- |
+| `--java /c/path/to/jdk/bin/java.exe` | Use this matching JDK for compilation and launching Designer |
+| `--packages-dir DIR` | Use a different local IS packages directory |
+| `--url http://localhost:PORT` | Use a different local IS port |
+| `--user USER` | Use a different IS account |
+| `--build-java` | Run the instance's `jcode.bat make` before loading packages |
+| `--no-load` | Explicitly skip live IS loading; create junctions and import projects only |
+| `--timeout 1800` | Allow more startup/import time for a large batch |
+
+## Existing copied folders
+
+A real folder created by the old copy script blocks the new junction. The launcher stops before applying the run when it detects that conflict.
+
+Review changes in both copies first. With local IS stopped, preserve the copied folder **outside the IS `packages` directory**, then start IS and rerun the preview. Do not place a second package backup in `packages`, where IS can discover it. The scripts never rename, remove, replace, or merge these folders automatically.
+
+From Windows CMD, junctions can be inspected with:
 
 ```bat
 dir /AL "C:\SoftwareAG1015_LCL\IntegrationServer\instances\default\packages"
 ```
 
-For a single package, the corresponding link command is:
+## Results and verification
 
-```bat
-mklink /J "C:\SoftwareAG1015_LCL\IntegrationServer\instances\default\packages\NBKAurionProServices" "C:\Users\YOUR_USER\git\ESB\NBKAurionProServices\NBKAurionProServices"
-```
+The launcher prints a `DesignerImport-logs-*` directory beneath the repository parent. It contains `bootstrap.log`, `designer-launch.log`, `import.properties`, `result.properties`, `import.log`, and backups of each package's `.project` and `.classpath`. The IS helper creates its response/build logs inside that same run directory.
 
-Replace `YOUR_USER` with the actual Windows profile name. The target junction path must not already exist.
+`status=SUCCESS` in `result.properties` means the Eclipse project imports, LSD nature/builder checks, and EGit directory associations succeeded. The shell exits with an error if the helper reports a failure or never starts. It does not treat the GUI launcher's PID as proof of success.
 
-## Run from Git Bash
+IS calls are a separate phase. The internal IS services can return an application error with HTTP 200. Common error forms are detected and all responses are retained; review package loaded/enabled status and dependency/Java errors in IS. If Package Navigator was already connected during startup, refresh its local server node once to obtain the current package list.
 
-Place `MoveToIS.sh` in `~/git/ESB`, or use `--repo-root` with that directory. The defaults match the IS path and port in your earlier screenshot.
+Save a harmless service edit in Designer and verify that the original checkout shows it:
 
 ```bash
-cd ~/git/ESB
-bash MoveToIS.sh --package NBKAurionProServices
-bash MoveToIS.sh --package NBKAurionProServices --apply --online
+git -C "$HOME/git/ESB/NBKAurionProServices" status --short
 ```
 
-For all detected packages, omit `--package`:
+Git Staging in Designer should show the same changes. Review the expected `.project` updates before committing. The launcher does not commit or push any of your package repositories.
 
-```bash
-bash MoveToIS.sh
-bash MoveToIS.sh --apply --online
-```
+## Preservation and failure behavior
 
-For packages with Java services that require compilation, add `--build-java`. Review the jcode log; an exit code alone may not show every compiler issue. The build writes generated files into the original checkout through the junction.
+- Projects already registered at their intended source location are reused. A project of the same name at another location, or shared with another VCS/repository, stops the import.
+- Existing Java classpaths and unrelated project natures/builders are preserved. Known LSD nature/builder identifiers are replaced with the ones actually registered by this Designer, including the namespace change documented for 12.1.
+- Build Automatically is suspended during import and restored afterward. Normal Designer builds may then run if that preference was enabled.
+- The small `nbk.tools.lsdimport_1.0.0.jar` remains in Designer's `dropins` directory. To uninstall it, close Designer, remove only that jar, and start Designer with `-clean`. A replaced previous helper jar is saved in the run directory.
+- The operation is **not an all-or-nothing transaction**. If IS loading or a later import fails, already created junctions/imported projects are preserved and reported. Metadata backups and normal Git diffs support review and recovery; there is no destructive automatic rollback.
 
-If package dependencies require a particular load order, create a plain text file listing the needed packages with dependencies first. `--order` is an allow-list: only names in that file are processed, in that order. Dependency order is not computed from manifests.
+## Validation and compatibility limits
 
-```bash
-bash MoveToIS.sh --order package-order.txt
-bash MoveToIS.sh --order package-order.txt --apply --online --build-java
-```
+The Java helper has been compiled against real Eclipse platform APIs. Launcher fixture checks cover selection of inner projects, existing-target protection, subset handling, missing metadata, and dry-run preservation. Bootstrap checks exercise jar packaging and workspace lock rejection. Metadata checks cover replacing the old LSD identifiers while preserving unrelated builders and their arguments.
 
-If IS is stopped, use `--apply` without `--online`, then start IS to discover the packages. The script never starts or stops IS.
+**The proprietary Designer LSD nature, Windows junction creation, and live IS behavior have not been integration-tested on your installation.** This is custom source-built automation, not a vendor-supported headless Designer command. Test one package with the supplied `--package` option before running the full batch.
 
-## Complete the Designer project setup
-
-1. Use Designer's local development server configuration for this same local IS. In the on-premises 10.15 workflow, Designer and the local development IS are in the same installation. An ordinary remote server connection alone does not establish LSD.
-2. In **Window > Preferences > Software AG > Service Development > Local Service Development**, select **Move project to Integration Server package as linked resource**.
-3. Bulk-import the existing **inner** package projects at their Git checkout locations. Their `.project` and `manifest.v3` should be at the project root. Do not copy them into the workspace. If Designer already knows the project, use the existing project.
-4. For projects missing the LSD configuration, use **Configure > Convert to Local Service Development Project**.
-5. If a project is not connected to Git, use **Team > Share Project > Git** and select its existing outer repository. This associates the project with the existing working tree; it should not create a new repository or relocate the project.
-6. Once the script's links and IS loading are complete, refresh Project Explorer and the local server in Package Navigator. Use **Load IS Package** where needed.
-
-Recent Designer versions also support selecting multiple projects and using **Move Project to IS Package** directly. That is a supported bulk alternative to the filesystem/IS part of this script.
-
-If these are older projects imported into Designer 12.1, IBM says to reapply the LSD project configuration. Its 12.1 documentation identifies builder `com.webmethods.sdev.vcsintegration.ISPackageBuilder` and nature `com.webmethods.sdev.vcsintegration.nature`. Do not blindly copy 10.15 project metadata over a 12.1 project; convert with the installed Designer version.
-
-## Verify one package before processing the remaining repositories
-
-1. Check that `dir /AL` shows the IS junction pointing to the **inner** package folder.
-2. Check that the package is loaded and enabled in IS Admin, and review IS package errors and the saved HTTP responses.
-3. In Designer, edit and save a harmless service change in that package.
-4. In Git Bash, check the original checkout:
-
-```bash
-git -C ~/git/ESB/NBKAurionProServices status --short
-```
-
-The service files should appear as changed there. Designer's Git Staging view should show those same changes after refresh. This verifies the filesystem relationship and the Designer Git association. No commit or push is performed by the script.
-
-## Compatibility and validation
-
-This is an independently prepared replacement script, based on the documented linked-resource workflow and Software AG's example sequence. It is not an exported Designer automation plugin. It requires Windows Git Bash, Git, `cmd.exe`, `cygpath`, and (for online loading) curl. It needs permission to create directory junctions and an IS account authorized for the package administration services.
-
-`wm.server.packages:packageActivate`, `packageEnable`, and `packageReload` are internal services used by the vendor example. Their availability and contracts must be checked on the installed IS version. Do not expose them or broaden their ACLs just to run this script. HTTP 200 can contain an IS application error; retain and review the response body and verify package status.
-
-Shell syntax and local fixture checks were run in the preparation environment. **Windows junction creation, jcode, Designer registration, and live IS calls have not been tested on your machine.**
+The developer checks run on a POSIX host with Python, a JDK, and Eclipse API jars using `python3 tests/run_checks.py --sdk-jars /path/to/api-jars`. The compilation check used Eclipse resources 3.18.100, runtime 3.26.100, equinox.common 3.17.0, core.jobs 3.13.200, equinox.registry 3.11.200, osgi 3.18.200, ui.workbench 3.127.0, and team.core 3.9.700. These test dependencies are not downloaded or installed by the user launcher.
 
 ## References
 
 - [IBM Designer 10.15 Local Service Development](https://www.ibm.com/docs/en/webmethods-integration/wm-designer/10.15.0?topic=help-using-local-service-development-feature)
-- [Software AG author's explanation of automating package import](https://community.ibm.com/community/user/viewdocument/how-to-automate-package-import-to-a?CommunityKey=82b75916-ed06-4a13-8eb6-0190da9f1bfa&hlmlt=VT&tab=librarydocuments)
-- [Vendor example ANT script](https://github.com/ibm-wm-transition/webmethods-integration-examples/blob/master/localdev_tools_importPackages2IS/import_IS_packages.xml)
-- [IBM Designer 12.1 Local Service Development](https://www.ibm.com/docs/en/webmethods-integration/wm-designer/12.1.0?topic=help-using-local-service-development-feature)
+- [IBM Designer 12.1 Local Service Development and changed project identifiers](https://www.ibm.com/docs/en/webmethods-integration/wm-designer/12.1.0?topic=help-using-local-service-development-feature)
+- [Software AG author's junction/activation automation example](https://community.ibm.com/community/user/viewdocument/how-to-automate-package-import-to-a?CommunityKey=82b75916-ed06-4a13-8eb6-0190da9f1bfa&hlmlt=VT&tab=librarydocuments)
+- [Eclipse startup extension](https://help.eclipse.org/latest/topic/org.eclipse.platform.doc.isv/reference/extension-points/org_eclipse_ui_startup.html)
+- [EGit 5.11 ConnectProviderOperation](https://github.com/eclipse-egit/egit/blob/stable-5.11/org.eclipse.egit.core/src/org/eclipse/egit/core/op/ConnectProviderOperation.java)
