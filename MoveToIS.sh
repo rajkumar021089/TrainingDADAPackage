@@ -53,6 +53,21 @@ while (( $# )); do
     *) die "Unknown option: $1" ;;
   esac
 done
+umask 077
+log_dir="$(mktemp -d "$PWD/MoveToIS-logs-$(date +%Y%m%d-%H%M%S)-XXXXXXXX")"
+run_log="$log_dir/run.log"
+exec 3>&1 4>&2
+exec > >(tee -a "$run_log") 2>&1
+log_pid=$!
+finish_logging() {
+  local status=$?
+  printf '\nExit status: %s\n' "$status"
+  exec 1>&3 2>&4 3>&- 4>&-
+  wait "$log_pid" || :
+}
+trap finish_logging EXIT
+printf 'Run log: %s\n' "$run_log"
+
 command -v git >/dev/null || die 'Git is required.'
 [[ -d "$repo_root" ]] || die "Repository parent does not exist: $repo_root"
 [[ -d "$packages_dir" ]] || die "IS packages directory does not exist: $packages_dir"
@@ -162,7 +177,7 @@ for i in "${indices[@]}"; do
 done
 (( blocked == 0 )) || die 'Resolve existing target folders first. Nothing was changed. See README.'
 if (( ! apply )); then
-  printf '\nDRY RUN: no files changed and no IS requests made. Add --apply to create junctions.\n'
+  printf '\nDRY RUN: no package or preference changes and no IS requests made. Add --apply to create junctions.\n'
   exit 0
 fi
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ;; *) die '--apply requires Windows Git Bash.' ;; esac
@@ -198,9 +213,6 @@ if (( build_java )); then
   jcode_win="$(cmd_path "$jcode")"
 fi
 
-umask 077
-log_dir="$(mktemp -d "$PWD/MoveToIS-logs-XXXXXXXX")"
-printf '\nResponse and build logs: %s\n' "$log_dir"
 for i in "${indices[@]}"; do
   dst="$packages_dir/${names[i]}"
   [[ "$dst" -ef "${sources[i]}" ]] && continue
@@ -212,7 +224,10 @@ for i in "${indices[@]}"; do
     MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
     cmd.exe /d /v:off /s /c 'mklink /J %MOVETOIS_LINK% %MOVETOIS_TARGET%' \
     > "$log_dir/${names[i]}-junction.log" 2>&1 \
-    || die "Junction creation failed; see $log_dir/${names[i]}-junction.log"
+    || {
+      cat "$log_dir/${names[i]}-junction.log" >&2
+      die "Junction creation failed; see $log_dir/${names[i]}-junction.log"
+    }
   [[ "$dst" -ef "${sources[i]}" ]] || die "Cannot confirm junction identity for $dst. Inspect it before continuing."
   printf 'LINKED %s\n' "${names[i]}"
 done
