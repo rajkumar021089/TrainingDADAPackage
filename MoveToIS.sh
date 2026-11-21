@@ -37,6 +37,22 @@ USAGE
 }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 require_value() { [[ $# -ge 2 && -n "$2" ]] || die "Missing value for $1"; }
+umask 077
+log_dir="$(mktemp -d "$PWD/MoveToIS-logs-$(date +%Y%m%d-%H%M%S)-XXXXXXXX")" || die "Could not create a log directory under $PWD"
+run_log="$log_dir/run.log"
+: > "$run_log" || die "Could not create $run_log"
+exec 3>&1 4>&2
+exec > >(tee -a "$run_log") 2>&1
+log_pid=$!
+finish_logging() {
+  local status=$?
+  printf '\nExit status: %s\n' "$status"
+  exec 1>&3 2>&4 3>&- 4>&-
+  wait "$log_pid" || :
+}
+trap finish_logging EXIT
+printf 'Run log: %s\n' "$run_log"
+
 while (( $# )); do
   case "$1" in
     --repo-root) require_value "$@"; repo_root="$2"; shift 2 ;;
@@ -53,21 +69,6 @@ while (( $# )); do
     *) die "Unknown option: $1" ;;
   esac
 done
-umask 077
-log_dir="$(mktemp -d "$PWD/MoveToIS-logs-$(date +%Y%m%d-%H%M%S)-XXXXXXXX")"
-run_log="$log_dir/run.log"
-exec 3>&1 4>&2
-exec > >(tee -a "$run_log") 2>&1
-log_pid=$!
-finish_logging() {
-  local status=$?
-  printf '\nExit status: %s\n' "$status"
-  exec 1>&3 2>&4 3>&- 4>&-
-  wait "$log_pid" || :
-}
-trap finish_logging EXIT
-printf 'Run log: %s\n' "$run_log"
-
 command -v git >/dev/null || die 'Git is required.'
 [[ -d "$repo_root" ]] || die "Repository parent does not exist: $repo_root"
 [[ -d "$packages_dir" ]] || die "IS packages directory does not exist: $packages_dir"
@@ -175,7 +176,7 @@ for i in "${indices[@]}"; do
   fi
   [[ -f "${sources[i]}/.project" ]] || printf '  NOTE: .project missing; Designer project setup is required\n'
 done
-(( blocked == 0 )) || die 'Resolve existing target folders first. Nothing was changed. See README.'
+(( blocked == 0 )) || die 'Resolve the BLOCKED destinations listed in the run log before applying. No packages or preferences were changed.'
 if (( ! apply )); then
   printf '\nDRY RUN: no package or preference changes and no IS requests made. Add --apply to create junctions.\n'
   exit 0
