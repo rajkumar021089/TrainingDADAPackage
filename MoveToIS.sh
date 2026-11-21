@@ -8,6 +8,7 @@ packages_dir='/c/SoftwareAG1015_LCL/IntegrationServer/instances/default/packages
 server_url='http://localhost:4455'
 is_user='Administrator'
 apply=0
+skip_blocked=0
 online=0
 build_java=0
 selected=''
@@ -25,6 +26,7 @@ Usage: bash MoveToIS.sh [options]
   --designer-workspace DIR  Enable linked resources in this Designer workspace with --apply
                            Close Designer before applying this workspace change.
   --apply             Create junctions and apply requested preferences
+  --skip-blocked      Continue with packages whose destinations are safe
   --online            With --apply, request activation, enable, and reload on local IS
   --build-java        With --apply, run the instance bin/jcode.bat make for each package
   --url URL           Local IS URL (default: http://localhost:4455)
@@ -63,6 +65,7 @@ while (( $# )); do
     --user) require_value "$@"; is_user="$2"; shift 2 ;;
     --designer-workspace) require_value "$@"; designer_workspace="$2"; shift 2 ;;
     --apply) apply=1; shift ;;
+    --skip-blocked) skip_blocked=1; shift ;;
     --online) online=1; shift ;;
     --build-java) build_java=1; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -160,7 +163,8 @@ update_designer_preference() (
   fi
 )
 
-blocked=0
+blocked_packages=()
+ready_indices=()
 for i in "${indices[@]}"; do
   dst="$packages_dir/${names[i]}"
   printf '\nPACKAGE %s\n  Git:    %s\n  Source: %s\n  IS:     %s\n' "${names[i]}" "${repositories[i]}" "${sources[i]}" "$dst"
@@ -169,14 +173,23 @@ for i in "${indices[@]}"; do
       printf '  Link: already resolves to the source directory\n'
     else
       printf '  BLOCKED: target already exists and is not the source directory\n'
-      blocked=1
+      blocked_packages+=("${names[i]}")
+      continue
     fi
   else
     printf '  Link: create a Windows junction\n'
   fi
+  ready_indices+=("$i")
   [[ -f "${sources[i]}/.project" ]] || printf '  NOTE: .project missing; Designer project setup is required\n'
 done
-(( blocked == 0 )) || die 'Resolve the BLOCKED destinations listed in the run log before applying. No packages or preferences were changed.'
+if (( ${#blocked_packages[@]} )); then
+  printf '\nBlocked packages (%s):\n' "${#blocked_packages[@]}"
+  printf '  %s\n' "${blocked_packages[@]}"
+  (( skip_blocked )) || die 'Use --skip-blocked to proceed with the other packages. No packages or preferences were changed.'
+  (( ${#ready_indices[@]} )) || die 'Every package destination is blocked.'
+  printf 'Skipping blocked packages. Packages eligible to proceed: %s\n' "${#ready_indices[@]}"
+fi
+indices=("${ready_indices[@]}")
 if (( ! apply )); then
   printf '\nDRY RUN: no package or preference changes and no IS requests made. Add --apply to create junctions.\n'
   exit 0
