@@ -73,16 +73,18 @@ for repo in "$repo_root"/*/; do
     [[ "$name" =~ ^NBK[A-Za-z0-9_.-]*$ ]] || die "Invalid package name: $name"
     src="$(cd "$candidate" && pwd -P)"
     git_root="$(git -C "$src" rev-parse --show-toplevel 2>/dev/null)" || die "Not inside a Git working tree: $src"
-    # Windows package names are case-insensitive; reject ambiguous targets.
-    for existing in "${names[@]}"; do
-      [[ "${existing,,}" != "${name,,}" ]] || die "Duplicate package name across repositories: $name"
-    done
     names+=("$name")
     sources+=("$src")
     repositories+=("$git_root")
   done
 done
 (( ${#names[@]} )) || die 'No inner NBK package with manifest.v3 was found.'
+
+declare -A package_counts=()
+for name in "${names[@]}"; do
+  key="${name,,}"
+  package_counts[$key]=$(( ${package_counts[$key]:-0} + 1 ))
+done
 
 indices=()
 if [[ -n "$order_file" ]]; then
@@ -93,6 +95,9 @@ if [[ -n "$order_file" ]]; then
     line="${line#"${line%%[![:space:]]*}"}"
     line="${line%"${line##*[![:space:]]}"}"
     [[ -n "$line" ]] || continue
+    [[ "$line" =~ ^NBK[A-Za-z0-9_.-]*$ ]] || die "Invalid package in order file: $line"
+    key="${line,,}"
+    [[ "${package_counts[$key]:-0}" -le 1 ]] || die "Package in order file has multiple sources: $line"
     index=''
     for i in "${!names[@]}"; do [[ "${names[i]}" != "$line" ]] || index="$i"; done
     [[ -n "$index" ]] || die "Package from order file not found: $line"
@@ -101,7 +106,15 @@ if [[ -n "$order_file" ]]; then
   done < "$order_file"
   (( ${#indices[@]} )) || die 'The order file contains no packages.'
 else
-  indices=("${!names[@]}")
+  for i in "${!names[@]}"; do
+    name="${names[i]}"
+    if (( package_counts[${name,,}] > 1 )); then
+      printf 'SKIPPED duplicate package %s: %s\n' "$name" "${sources[i]}" >&2
+    else
+      indices+=("$i")
+    fi
+  done
+  (( ${#indices[@]} )) || die 'No packages with a unique source were found.'
 fi
 
 if [[ -n "$designer_workspace" ]]; then
